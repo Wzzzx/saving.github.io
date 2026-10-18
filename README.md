@@ -1,6 +1,6 @@
 # saving.github.io
 
-这是一个个人使用的记账软件。该软件以 Github Page 的形似部署。
+这是一个个人使用的记账软件。该软件部署为 Github Page
 
 ## 架构
 
