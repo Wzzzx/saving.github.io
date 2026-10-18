@@ -7,7 +7,7 @@ const label = (list, id) => list.find(item => item.id === id)?.name || '已删�
 let data, storage, readError = '', rawBackup = '';
 let page = 'record', editing = '', editingRule = '';
 let month = C.dateKey(new Date()).slice(0, 7), filterTag = '', filterPayment = '';
-let draft = { amount: '', tags: [], payment: '', time: C.localTime() };
+let draft = { amount: '', note: '', tags: [], payment: '', time: C.localTime() };
 let toastTimer;
 try {
   storage = window.localStorage;
@@ -62,7 +62,7 @@ function bindChips(form) {
 function captureDraft() {
   if (page !== 'record') return;
   const form = app.querySelector('#entry-form');
-  if (form) draft = { amount: form.elements.amount.value, tags: selected(form, 'tags'), payment: selected(form, 'payment')[0] || '', time: form.elements.time.value };
+  if (form) draft = { amount: form.elements.amount.value, note: form.elements.note.value, tags: selected(form, 'tags'), payment: selected(form, 'payment')[0] || '', time: form.elements.time.value };
 }
 function go(next) {
   captureDraft();
@@ -92,7 +92,7 @@ function renderEntry() {
   const value = entry ? { ...entry, amount: (entry.amount / 100).toFixed(2) } : draft;
   if (!entry && !data.payments.some(p => p.active && p.id === value.payment)) value.payment = data.payments.find(p => p.active)?.id || '';
   if (!entry) value.tags = value.tags.filter(id => data.tags.some(t => t.id === id && t.active));
-  app.innerHTML = `${entry ? '<button class="back" type="button" id="back">‹ 返回明细</button>' : ''}${heading(entry ? '修改这笔支出' : '记一笔', entry ? '调整一下，让账目准确。' : '')}<form id="entry-form" novalidate><div class="amount-card"><label for="amount">支出金额</label><div class="amount-line"><span class="currency">¥</span><input id="amount" name="amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${esc(value.amount)}" aria-label="支出金额（人民币）" required></div><div class="amount-foot">人民币 CNY</div></div>${choices(value.tags, value.payment)}<div class="field"><label for="time">记账时间</label><input class="wide" id="time" name="time" type="datetime-local" value="${esc(value.time)}" required></div><p class="form-error" role="alert"></p><button class="primary" type="submit">${entry ? '保存修改' : '记好了'}</button>${entry ? '<button class="delete danger" type="button" id="delete-entry">删除这笔支出</button>' : '<p class="hint">留一点记录，让生活有迹可循。</p>'}</form>`;
+  app.innerHTML = `${entry ? '<button class="back" type="button" id="back">‹ 返回明细</button>' : ''}${heading(entry ? '修改这笔支出' : '记一笔', entry ? '调整一下，让账目准确。' : '')}<form id="entry-form" novalidate><div class="amount-card"><label for="amount">支出金额</label><div class="amount-line"><span class="currency">¥</span><input id="amount" name="amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${esc(value.amount)}" aria-label="支出金额（人民币）" required></div><div class="amount-foot">人民币 CNY</div></div>${choices(value.tags, value.payment)}<div class="field"><label for="note">备注 <small>选填</small></label><input class="wide" id="note" name="note" type="text" placeholder="例如：午饭、买书、打车去公司" value="${esc(value.note)}"></div><div class="field"><label for="time">记账时间</label><input class="wide" id="time" name="time" type="datetime-local" value="${esc(value.time)}" required></div><p class="form-error" role="alert"></p><button class="primary" type="submit">${entry ? '保存修改' : '记好了'}</button>${entry ? '<button class="delete danger" type="button" id="delete-entry">删除这笔支出</button>' : '<p class="hint">留一点记录，让生活有迹可循。</p>'}</form>`;
   const form = app.querySelector('form');
   bindChips(form);
   if (entry) {
@@ -111,7 +111,7 @@ function renderEntry() {
     if (!payment) return errorText('请选择付款方式，可在设置中添加');
     if (!time || !Number.isFinite(new Date(time).getTime())) return errorText('请选择有效的记账时间');
     const tags = selected(form, 'tags');
-    const result = { ...(entry || {}), id: entry?.id || C.id(), amount, tags, payment, time };
+    const result = { ...(entry || {}), id: entry?.id || C.id(), amount, tags, payment, time, note: form.elements.note.value.trim() };
     if (!save(next => {
       if (entry) next.entries[next.entries.findIndex(e => e.id === entry.id)] = result;
       else next.entries.push(result);
@@ -119,7 +119,7 @@ function renderEntry() {
     })) return;
     if (entry) { go('history'); toast('已保存修改'); }
     else {
-      draft = { amount: '', tags, payment, time: C.localTime() };
+      draft = { amount: '', note: '', tags, payment, time: C.localTime() };
       render();
       toast('记好了');
       document.querySelector('#amount').focus({ preventScroll: true });
@@ -139,7 +139,7 @@ function renderHistory() {
     const dayHeading = date !== previous ? `<div class="day-title"><span>${esc(date)}</span></div>` : '';
     previous = date;
     const names = e.tags.map(id => label(data.tags, id));
-    return `${dayHeading}<button type="button" class="entry" data-entry="${esc(e.id)}"><span class="entry-icon" aria-hidden="true">${esc((names[0] || '支出').slice(0, 1))}</span><span class="entry-main"><span class="entry-title">${esc(names.join(' · ') || '未分类')}</span><span class="entry-meta">${esc(label(data.payments, e.payment))} · ${esc(e.time.slice(11))}${e.source ? ' · 固定支出' : ''}</span></span><strong class="entry-amount">−${C.money(e.amount)}</strong></button>`;
+    return `${dayHeading}<button type="button" class="entry" data-entry="${esc(e.id)}"><span class="entry-icon" aria-hidden="true">${esc((names[0] || '支出').slice(0, 1))}</span><span class="entry-main"><span class="entry-title">${esc(names.join(' · ') || '未分类')}</span>${e.note ? `<span class="entry-note">${esc(e.note)}</span>` : ''}<span class="entry-meta">${esc(label(data.payments, e.payment))} · ${esc(e.time.slice(11))}${e.source ? ' · 固定支出' : ''}</span></span><strong class="entry-amount">−${C.money(e.amount)}</strong></button>`;
   }).join('');
   app.innerHTML = `${heading('日常明细')}<label class="field-title" for="month">查看月份</label><input class="wide" id="month" type="month" value="${esc(month)}"><div class="summary"><p>${filterTag || filterPayment ? '筛选支出' : '本月支出'}</p><strong>¥ ${total}</strong><small>${entries.length} 笔记录</small></div><div class="filters"><select id="filter-tag" aria-label="按标签筛选">${options(data.tags, filterTag, '全部标签')}</select><select id="filter-payment" aria-label="按付款方式筛选">${options(data.payments, filterPayment, '全部付款方式')}</select></div>${rows || '<div class="empty"><span class="empty-symbol">○</span>这里还没有记录<br>去记下今天的第一笔吧。</div>'}`;
   document.querySelector('#month').onchange = e => { if (e.target.value) { month = e.target.value; renderHistory(); } };

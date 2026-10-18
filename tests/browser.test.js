@@ -54,16 +54,27 @@ test('mobile browser: record, edit, filters, recurring, persistence and failure 
     assert.ok(await run(() => document.querySelector('#entry-form .primary').getBoundingClientRect().bottom <= document.querySelector('#nav').getBoundingClientRect().top), 'save button visible above navigation');
     await run(() => {
       document.querySelector('#amount').value = '12.34';
+      document.querySelector('#note').value = '<b>午饭</b>';
+      document.querySelector('[data-page=settings]').click();
+      document.querySelector('[data-page=record]').click();
       const tags = document.querySelectorAll('[data-kind=tags] button'); tags[0].click(); tags[1].click();
       document.querySelector('#entry-form').requestSubmit();
     });
     assert.equal(await run(() => JSON.parse(localStorage.getItem('saving.v1')).entries[0].amount), 1234);
     assert.equal(await run(() => document.querySelector('#amount').value), '');
+    assert.equal(await run(() => JSON.parse(localStorage.getItem('saving.v1')).entries[0].note), '<b>午饭</b>');
+    assert.equal(await run(() => document.querySelector('#note').value), '');
     assert.equal(await run(() => document.querySelectorAll('[data-kind=tags] [aria-pressed=true]').length), 2);
     await run(() => { document.querySelector('#amount').value = '0.001'; document.querySelector('form').requestSubmit(); });
     assert.ok(await run(() => document.querySelector('.form-error').textContent.includes('两位小数')));
     await run(() => { document.querySelector('#amount').value = '25.60'; document.querySelector('form').requestSubmit(); document.querySelector('[data-page=history]').click(); });
     assert.equal(await run(() => document.querySelectorAll('.entry').length), 2);
+    assert.equal(await run(() => document.querySelector('.entry-note').textContent), '<b>午饭</b>');
+    assert.equal(await run(() => document.querySelectorAll('.entry-note b').length), 0);
+    await run(() => { document.querySelector('.entry-note').closest('button').click(); });
+    assert.equal(await run(() => document.querySelector('#note').value), '<b>午饭</b>');
+    await run(() => { document.querySelector('#note').value = '午饭和咖啡'; document.querySelector('form').requestSubmit(); });
+    assert.equal(await run(() => document.querySelector('.entry-note').textContent), '午饭和咖啡');
     assert.equal(await run(() => document.querySelector('.summary strong').textContent), '¥ 37.94');
     await run(() => { document.querySelector('.entry').click(); document.querySelector('#amount').value = '10'; document.querySelector('form').requestSubmit(); });
     assert.equal(await run(() => JSON.parse(localStorage.getItem('saving.v1')).entries.some(e => e.amount === 1000)), true);
