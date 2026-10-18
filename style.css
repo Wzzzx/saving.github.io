@@ -69,7 +69,7 @@ nav button[aria-current=page] span { background: var(--soft); border-radius: 12p
 .panel h2 { font-size: 16px; }
 .config-row { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
 .config-row input { width: 100%; flex: 1; min-width: 0; padding: 9px 11px; font-size: 14px; }
-.config-row button { font-size: 12px; min-height: 44px; padding: 8px; white-space: nowrap; }
+.config-remove { flex-shrink: 0; width: 44px; min-height: 44px; padding: 8px; font-size: 22px; line-height: 1; color: var(--muted); }
 .add-row { display: flex; gap: 8px; margin-top: 14px; }
 .add-row input { width: 100%; min-width: 0; font-size: 14px; }
 .add-row button { flex-shrink: 0; }

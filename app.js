@@ -148,7 +148,7 @@ function renderHistory() {
   app.querySelectorAll('[data-entry]').forEach(el => el.onclick = () => { editing = el.dataset.entry; go('edit'); });
 }
 function configPanel(kind, title, placeholder) {
-  return `<section class="panel"><div class="panel-head"><h2>${title}</h2><small>直接点选，更快一点</small></div>${data[kind].filter(i => i.active).map(i => `<div class="config-row" data-kind="${kind}" data-config-id="${esc(i.id)}"><input aria-label="${title}名称" maxlength="20" value="${esc(i.name)}"><button type="button" data-action="rename">保存</button><button type="button" class="danger" data-action="remove">删除</button></div>`).join('')}<form class="add-row" data-add="${kind}"><input name="name" maxlength="20" aria-label="新增${title}" placeholder="${placeholder}" required><button class="secondary" type="submit">添加</button></form></section>`;
+  return `<section class="panel"><div class="panel-head"><h2>${title}</h2><small>修改后自动保存</small></div>${data[kind].filter(i => i.active).map(i => `<div class="config-row" data-kind="${kind}" data-config-id="${esc(i.id)}"><input aria-label="${title}名称" maxlength="20" value="${esc(i.name)}"><button type="button" class="config-remove" aria-label="删除${esc(i.name)}">×</button></div>`).join('')}<form class="add-row" data-add="${kind}"><input name="name" maxlength="20" aria-label="新增${title}" placeholder="${placeholder}" required><button class="secondary" type="submit">添加</button></form></section>`;
 }
 function cycleText(v) {
   return v.cycle === 'daily' ? '每天' : v.cycle === 'weekly' ? `每周${['日', '一', '二', '三', '四', '五', '六'][v.day]}` : `每月 ${v.day} 日`;
@@ -162,21 +162,33 @@ function renderSettings() {
     if (data[kind].some(i => i.active && i.name === name)) return errorText('这个名称已经有了');
     if (save(next => { const item = { id: C.id(), name, active: true }; next[kind].push(item); if (kind === 'payments' && !next[kind].some(p => p.active && p.id === next.lastPayment)) next.lastPayment = item.id; })) { renderSettings(); toast('已添加'); }
   });
-  app.querySelectorAll('[data-config-id]').forEach(row => row.addEventListener('click', event => {
-    const action = event.target.dataset.action;
-    if (!action) return;
+  app.querySelectorAll('[data-config-id]').forEach(row => {
     const kind = row.dataset.kind, id = row.dataset.configId;
-    const name = row.querySelector('input').value.trim();
-    if (action === 'rename') {
+    const input = row.querySelector('input');
+    const remove = row.querySelector('.config-remove');
+    input.addEventListener('blur', () => {
+      const name = input.value.trim();
+      if (name === data[kind].find(i => i.id === id).name) return;
       if (!name) return errorText('名称不能为空');
       if (data[kind].some(i => i.active && i.id !== id && i.name === name)) return errorText('这个名称已经有了');
-      if (save(next => { next[kind].find(i => i.id === id).name = name; })) toast('名称已保存');
-    } else {
+      if (save(next => { next[kind].find(i => i.id === id).name = name; })) {
+        input.value = name;
+        remove.setAttribute('aria-label', `删除${name}`);
+        errorText('');
+      }
+    });
+    input.addEventListener('keydown', event => {
+      if (event.key === 'Enter' && !event.isComposing) {
+        event.preventDefault();
+        input.blur();
+      }
+    });
+    remove.addEventListener('click', () => {
       const inUse = data.rules.some(r => !r.stopped && (kind === 'tags' ? r.versions.at(-1).tags.includes(id) : r.versions.at(-1).payment === id));
       if (inUse) return errorText('有固定支出正在使用此选项，请先修改对应固定支出');
       if (save(next => { next[kind].find(i => i.id === id).active = false; })) { renderSettings(); toast('已删除，历史账目保留'); }
-    }
-  }));
+    });
+  });
   document.querySelector('#add-rule').onclick = () => { editingRule = ''; go('rule'); };
   app.querySelectorAll('[data-rule]').forEach(el => el.onclick = () => { editingRule = el.dataset.rule; go('rule'); });
   document.querySelector('#check-pending').onclick = () => showPending(true);
