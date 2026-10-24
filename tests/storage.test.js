@@ -8,6 +8,22 @@ function memory() {
   const map = new Map();
   return { getItem: key => map.get(key) ?? null, setItem: (key, value) => map.set(key, value), removeItem: key => map.delete(key) };
 }
+test('unsupported saved sessions are removed without touching cached ledger or pending changes', () => {
+  const storage = memory();
+  const client = new Client(storage);
+  storage.setItem(client.sessionKey(), JSON.stringify({ user: { id: 'alice' }, api_key: 'retired-credential' }));
+  storage.setItem('saving.active', 'saving.cache:test:alice');
+  storage.setItem('saving.cache:test:alice', 'pending-ledger');
+  storage.setItem('saving.sync.v2:test:alice', 'pending-request');
+  const reopened = new Client(storage);
+  assert.equal(reopened.session, null);
+  assert.equal(storage.getItem(client.sessionKey()), null);
+  assert.equal(storage.getItem('saving.active'), 'saving.cache:test:alice');
+  assert.equal(storage.getItem('saving.cache:test:alice'), 'pending-ledger');
+  assert.equal(storage.getItem('saving.sync.v2:test:alice'), 'pending-request');
+  reopened.remember({ user: { id: 'alice' }, access_token: 'valid', refresh_token: 'refresh', expires_in: 3600 });
+  assert.equal(new Client(storage).session.access_token, 'valid');
+});
 test('network failures explain connectivity without losing the session or pending ledger', async () => {
   const storage = memory();
   const client = new Client(storage, async () => { throw new TypeError('Failed to fetch'); });
