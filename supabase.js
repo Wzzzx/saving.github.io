@@ -67,6 +67,27 @@
     async login(email, password) {
       return this.remember(await this.call('/auth/v1/token?grant_type=password', { method: 'POST', body: JSON.stringify({ email, password }) }));
     }
+    async keyCall(key, action, args = {}) {
+      try {
+        return await this.call('/rest/v1/rpc/key_access', {
+          method: 'POST', headers: { 'Content-Profile': 'savin', 'Accept-Profile': 'savin', 'X-Savin-Key': key },
+          body: JSON.stringify({ p_action: action, p_args: args })
+        });
+      } catch (error) {
+        if (error.status === 401) error.message = '个人 API Key 无效、已过期或已撤销';
+        throw error;
+      }
+    }
+    async loginKey(value) {
+      const key = value.trim();
+      if (!/^savin_key_[A-Za-z0-9_-]{43}$/.test(key)) throw new Error('请填写 savin_key_ 开头的个人 API Key');
+      const profile = await this.keyCall(key, 'profile');
+      if (!profile?.user?.id || !profile.key_id) throw new Error('密钥验证响应不完整');
+      const session = { user: profile.user, api_key: key, key_id: profile.key_id, key_expires_at: profile.expires_at };
+      this.storage.setItem(this.sessionKey(), JSON.stringify(session));
+      this.session = session;
+      return session;
+    }
     async token() {
       if (!this.session) throw new Error('请先登录，待上传数据保留在本机');
       if (this.session.expires_at * 1000 > Date.now() + 60000) return this.session.access_token;
@@ -84,6 +105,7 @@
     }
     syncKey() { return 'saving.sync.v2:' + this.config.url + ':' + this.session.user.id; }
     async rpc(name, args = {}) {
+      if (this.session?.api_key) return this.keyCall(this.session.api_key, name, args);
       return this.call('/rest/v1/rpc/' + name, {
         method: 'POST', headers: { 'Content-Profile': 'savin', 'Accept-Profile': 'savin' }, body: JSON.stringify(args)
       }, await this.token());

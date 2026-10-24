@@ -207,7 +207,7 @@ function updateCloudStatus(message) {
 function renderCloudPanel() {
   const section = document.createElement('section');
   section.className = 'panel';
-  section.innerHTML = `<div class="panel-head"><h2>云端保存</h2></div><p class="notice" data-sync-status>${esc(ledgerStore.status || '仅保存在本机，登录后自动上传')}</p><p class="notice">${cloud.session ? '已登录：' + esc(cloud.session.user.email) : '登录后自动上传本机账本。使用 Supabase 中创建的个人账号。'}</p><form id="cloud-config"><label for="cloud-url">项目 URL</label><input class="wide" id="cloud-url" type="url" required value="${esc(cloud.config.url)}"><label for="cloud-key">公开 Publishable key</label><input class="wide" id="cloud-key" type="text" autocomplete="off" required value="${esc(cloud.config.key)}"><button class="secondary wide" type="submit">保存连接配置</button></form><form id="cloud-login"><label for="cloud-email">邮箱</label><input class="wide" id="cloud-email" type="email" autocomplete="username" required><label for="cloud-password">密码</label><input class="wide" id="cloud-password" type="password" autocomplete="current-password" required><button class="secondary wide" type="submit">${cloud.session ? '重新登录 / 切换账号' : '登录'}</button></form><div class="row"><button class="secondary" id="cloud-retry" type="button">重试同步</button>${cloud.session ? '<button class="text-button" id="cloud-logout" type="button">退出登录</button>' : ''}</div><p class="form-error" role="alert"></p>`;
+  section.innerHTML = `<div class="panel-head"><h2>云端保存</h2></div><p class="notice" data-sync-status>${esc(ledgerStore.status || '仅保存在本机，登录后自动上传')}</p><p class="notice">${cloud.session ? '已登录：' + esc(cloud.session.user.email || '?? API Key') : '登录后自动上传本机账本。使用 Supabase 中创建的个人账号。'}</p><form id="cloud-config"><label for="cloud-url">项目 URL</label><input class="wide" id="cloud-url" type="url" required value="${esc(cloud.config.url)}"><label for="cloud-key">公开 Publishable key</label><input class="wide" id="cloud-key" type="text" autocomplete="off" required value="${esc(cloud.config.key)}"><button class="secondary wide" type="submit">保存连接配置</button></form><form id="cloud-key-login"><label for="cloud-personal-key">?? API Key</label><input class="wide" id="cloud-personal-key" type="password" autocomplete="off" spellcheck="false" placeholder="savin_key_?" required><button class="secondary wide" type="submit">????????</button></form><form id="cloud-login"><label for="cloud-email">邮箱</label><input class="wide" id="cloud-email" type="email" autocomplete="username" required><label for="cloud-password">密码</label><input class="wide" id="cloud-password" type="password" autocomplete="current-password" required><button class="secondary wide" type="submit">${cloud.session ? '重新登录 / 切换账号' : '登录'}</button></form><div class="row"><button class="secondary" id="cloud-retry" type="button">重试同步</button>${cloud.session ? '<button class="text-button" id="cloud-logout" type="button">退出登录</button>' : ''}</div><p class="form-error" role="alert"></p>`;
   app.querySelector('.panel').before(section);
   section.querySelector('#cloud-config').onsubmit = event => {
     event.preventDefault();
@@ -215,6 +215,16 @@ function renderCloudPanel() {
       cloud.configure(section.querySelector('#cloud-url').value, section.querySelector('#cloud-key').value);
       if (cloud.session) { ledgerStore.bind(); await ledgerStore.sync(true); }
       else ledgerStore.setStatus('连接配置已保存，请登录');
+    });
+  };
+  section.querySelector('#cloud-key-login').onsubmit = event => {
+    event.preventDefault();
+    const input = section.querySelector('#cloud-personal-key');
+    void cloudAction(async () => {
+      await cloud.loginKey(input.value);
+      input.value = '';
+      ledgerStore.bind();
+      await ledgerStore.sync(true);
     });
   };
   section.querySelector('#cloud-login').onsubmit = event => {
@@ -242,7 +252,7 @@ async function cloudAction(action, background = false) {
   const oldData = JSON.stringify(data);
   cloudBusy = true;
   cloudBackground = background;
-  app.querySelectorAll('#cloud-config button, #cloud-login button, #cloud-retry, #cloud-logout').forEach(button => { button.disabled = true; });
+  app.querySelectorAll('#cloud-config button, #cloud-login button, #cloud-key-login button, #cloud-retry, #cloud-logout').forEach(button => { button.disabled = true; });
   try {
     if (ledgerStore.running) await ledgerStore.running.catch(() => {});
     await action();

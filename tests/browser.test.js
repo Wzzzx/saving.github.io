@@ -161,6 +161,19 @@ test('mobile browser: record, edit, filters, recurring, persistence and failure 
     assert.equal(await run(() => window.testRemote.payload.entries.length), 5);
     assert.equal(await run(() => JSON.parse(localStorage.getItem(localStorage.getItem('saving.active')))._sync.dirty), false);
     assert.equal(await run(() => document.querySelector('#cloud-password').value), '');
+    await run(() => {
+      cloud.request = async (url, options) => {
+        const body = JSON.parse(options.body);
+        if (body.p_action === 'profile') return new Response(JSON.stringify({ user: { id: 'browser-user' }, key_id: 'browser-key' }));
+        return new Response(JSON.stringify(window.testRemote));
+      };
+      document.querySelector('#cloud-personal-key').value = 'savin_key_' + 'a'.repeat(43);
+      document.querySelector('#cloud-key-login').requestSubmit();
+    });
+    for (let i = 0; i < 100; i++) { if (await run(() => !cloudBusy)) break; await delay(30); }
+    assert.equal(await run(() => cloud.session.key_id), 'browser-key');
+    assert.equal(await run(() => document.querySelector('#cloud-personal-key').value), '');
+    assert.equal(await run(() => JSON.parse(localStorage.getItem(localStorage.getItem('saving.active'))).entries.length), 5);
     await run(() => localStorage.setItem(localStorage.getItem('saving.active'), '{broken'));
     await send('Page.reload');
     for (let i = 0; i < 100; i++) { if (await run(() => !!document.querySelector('#raw-data'))) break; await delay(50); }

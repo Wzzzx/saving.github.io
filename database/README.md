@@ -41,6 +41,22 @@
 
 ## 权限
 
+### 个人 API Key
+
+[personal-api-keys.sql](personal-api-keys.sql) 增加了个人密钥访问。密钥由密码学安全随机源生成（256 位随机数），前缀为 `savin_key_`，不是 Supabase 公开 Publishable key。
+
+`savin_private.api_keys` 只保存 SHA-256 摘要、所属用户、标识、有效期和撤销时间，私有 schema 不暴露到 Data API。默认有效期一年。明文只交付给用户，不写入版本库；浏览器使用时保存在该项目的本地会话中，不进入账本导出。
+
+请求 `POST /rest/v1/rpc/key_access`，使用公开 `apikey` 和 `Content-Profile: savin`，个人密钥放入 `X-Savin-Key` 请求头。请求体为 `{ "p_action": "profile|read_book|apply_changes", "p_args": {} }`。写入参数与原增量接口一致，仍有版本校验和原子事务。密钥不能指定其他账号、操作其他 schema 或修改账号密码。
+
+公开入口是 SECURITY INVOKER；私有鉴权函数由无登录、无 BYPASSRLS 的 `savin_key_gateway` 角色持有，校验密钥后才临时设置该账号身份，调用完恢复身份。该角色继承标准 authenticated 权限，以访问 Supabase 管理的 auth schema，业务表继续使用 RLS。普通用户不能读取摘要表或切换成此角色。无密钥、已过期或已撤销均返回 401。
+
+管理员撤销指定密钥：`update savin_private.api_keys set revoked_at = now() where id = '<key-id>';`。退出网页只清除本浏览器凭据，不撤销其他设备正在使用的同一密钥。
+
+[verify-personal-api-keys.sql](verify-personal-api-keys.sql) 在回滚事务内验证读写、身份伪造防护、无密钥拒绝及撤销。前端测试：`node --test tests/api-key.test.js`。该 SQL 使用当前测试账号和 23 笔账目断言，账目变化后需调整断言。
+
+### 邮箱密码登录
+
 所有新表启用 RLS，SELECT/INSERT/UPDATE/DELETE 限定 `(select auth.uid()) = user_id`，UPDATE 同时校验新旧归属。匿名没有访问权。RPC 使用 SECURITY INVOKER 和空 search_path，通过调用者权限及 RLS 执行，不能指定其他用户。
 
 前端仅使用公开 Publishable key 和用户令牌。密码不落盘，令牌不进入导出。本次不修改其他 schema 或全局 Data API 暴露配置。原项目通过 authenticator 的 pgrst.db_schemas 配置暴露 savin，该配置覆盖控制台的 Exposed schemas，后续修改应保留 public、graphql_public、savin。
