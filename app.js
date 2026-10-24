@@ -5,14 +5,19 @@ const dialog = document.querySelector('#backfill');
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const label = (list, id) => list.find(item => item.id === id)?.name || '已删除';
 let data, storage, readError = '', rawBackup = '';
+let cloud, ledgerStore, cloudBusy = false;
+let cloudBackground = false;
 let page = 'record', editing = '', editingRule = '';
 let month = C.dateKey(new Date()).slice(0, 7), filterTag = '', filterPayment = '';
 let draft = { amount: '', note: '', tags: [], payment: '', time: C.localTime() };
 let toastTimer;
 try {
   storage = window.localStorage;
-  rawBackup = storage.getItem(C.KEY) || '';
-  data = C.read(storage);
+  cloud = new SavinCloud.Client(storage);
+  ledgerStore = new SavinStorage.Store(storage, cloud, updateCloudStatus);
+  if (cloud.session) ledgerStore.bind();
+  rawBackup = storage.getItem(ledgerStore.key) || '';
+  data = ledgerStore.read();
   draft.payment = data.payments.find(p => p.active && p.id === data.lastPayment)?.id || data.payments.find(p => p.active)?.id || '';
 } catch (error) {
   readError = '无法读取本地数据。现有数据不会被覆盖，请先复制备份。';
@@ -31,10 +36,11 @@ function errorText(message, target = app) {
 }
 function save(change, target = app) {
   try {
-    data = C.commit(storage, data, change);
+    if ((cloudBusy && !cloudBackground) || readError) throw new Error('请等待云端读取完成');
+    data = ledgerStore.commit(data, change);
     return true;
   } catch (error) {
-    errorText('未保存成功，请检查浏览器存储空间或设置。输入内容已保留。', target);
+    errorText(cloudBusy || ledgerStore?.loading ? '正在读取云端，请稍后保存。输入内容已保留。' : '未保存成功：' + error.message + '。输入内容已保留。', target);
     return false;
   }
 }
@@ -90,7 +96,7 @@ function renderEntry() {
   const entry = page === 'edit' ? data.entries.find(e => e.id === editing) : null;
   if (page === 'edit' && !entry) return go('history');
   const value = entry ? { ...entry, amount: (entry.amount / 100).toFixed(2) } : draft;
-  if (!entry && !data.payments.some(p => p.active && p.id === value.payment)) value.payment = data.payments.find(p => p.active)?.id || '';
+  if (!entry && !data.payments.some(p => p.active && p.id === value.payment)) value.payment = data.payments.find(p => p.active && p.id === data.lastPayment)?.id || data.payments.find(p => p.active)?.id || '';
   if (!entry) value.tags = value.tags.filter(id => data.tags.some(t => t.id === id && t.active));
   app.innerHTML = `${entry ? '<button class="back" type="button" id="back">‹ 返回明细</button>' : ''}${heading(entry ? '修改这笔支出' : '记一笔', entry ? '调整一下，让账目准确。' : '')}<form id="entry-form" novalidate><div class="amount-card"><label for="amount">支出金额</label><div class="amount-line"><span class="currency">¥</span><input id="amount" name="amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${esc(value.amount)}" aria-label="支出金额（人民币）" required></div><div class="amount-foot">人民币 CNY</div></div>${choices(value.tags, value.payment)}<div class="field"><label for="note">备注 <small>选填</small></label><input class="wide" id="note" name="note" type="text" placeholder="例如：午饭、买书、打车去公司" value="${esc(value.note)}"></div><div class="field"><label for="time">记账时间</label><input class="wide" id="time" name="time" type="datetime-local" value="${esc(value.time)}" required></div><p class="form-error" role="alert"></p><button class="primary" type="submit">${entry ? '保存修改' : '记好了'}</button>${entry ? '<button class="delete danger" type="button" id="delete-entry">删除这笔支出</button>' : '<p class="hint">留一点记录，让生活有迹可循。</p>'}</form>`;
   const form = app.querySelector('form');
@@ -154,7 +160,7 @@ function cycleText(v) {
   return v.cycle === 'daily' ? '每天' : v.cycle === 'weekly' ? `每周${['日', '一', '二', '三', '四', '五', '六'][v.day]}` : `每月 ${v.day} 日`;
 }
 function renderSettings() {
-  app.innerHTML = `${heading('按你的习惯')}<p class="form-error" role="alert"></p>${configPanel('tags', '支出标签', '例如：咖啡')}${configPanel('payments', '付款方式', '例如：信用卡')}<section class="panel"><div class="panel-head"><h2>固定支出</h2><button class="text-button" type="button" id="add-rule">＋ 添加</button></div>${data.rules.filter(r => !r.stopped).map(r => { const v = r.versions.at(-1); return `<div class="rule-row"><button type="button" data-rule="${esc(r.id)}"><strong>${esc(v.name)} <span style="float:right">¥ ${C.money(v.amount)}</span></strong><small>${cycleText(v)} · ${esc(v.at)} · ${esc(label(data.payments, v.payment))}</small></button></div>`; }).join('') || '<p class="notice">房租、水电、订阅，到期后选一下就能补记。</p>'}<button class="text-button" type="button" id="check-pending">查看待补记录</button></section><section class="panel"><div class="panel-head"><h2>留一份备份</h2></div><p class="notice">账目只保存在当前浏览器。清理网站数据前，记得导出。</p><button class="secondary wide" type="button" id="export">复制全部数据</button></section>`;
+  app.innerHTML = `${heading('按你的习惯')}<p class="form-error" role="alert"></p>${configPanel('tags', '支出标签', '例如：咖啡')}${configPanel('payments', '付款方式', '例如：信用卡')}<section class="panel"><div class="panel-head"><h2>固定支出</h2><button class="text-button" type="button" id="add-rule">＋ 添加</button></div>${data.rules.filter(r => !r.stopped).map(r => { const v = r.versions.at(-1); return `<div class="rule-row"><button type="button" data-rule="${esc(r.id)}"><strong>${esc(v.name)} <span style="float:right">¥ ${C.money(v.amount)}</span></strong><small>${cycleText(v)} · ${esc(v.at)} · ${esc(label(data.payments, v.payment))}</small></button></div>`; }).join('') || '<p class="notice">房租、水电、订阅，到期后选一下就能补记。</p>'}<button class="text-button" type="button" id="check-pending">查看待补记录</button></section><section class="panel"><div class="panel-head"><h2>留一份备份</h2></div><p class="notice">账目先存本机，再上传云端。清理网站数据前，请确认已同步或复制备份。</p><button class="secondary wide" type="button" id="export">复制全部数据</button></section>`;
   app.querySelectorAll('[data-add]').forEach(form => form.onsubmit = event => {
     event.preventDefault();
     const kind = form.dataset.add, name = form.elements.name.value.trim();
@@ -193,6 +199,66 @@ function renderSettings() {
   app.querySelectorAll('[data-rule]').forEach(el => el.onclick = () => { editingRule = el.dataset.rule; go('rule'); });
   document.querySelector('#check-pending').onclick = () => showPending(true);
   document.querySelector('#export').onclick = exportData;
+  renderCloudPanel();
+}
+function updateCloudStatus(message) {
+  for (const el of document.querySelectorAll('[data-sync-status]')) el.textContent = message;
+}
+function renderCloudPanel() {
+  const section = document.createElement('section');
+  section.className = 'panel';
+  section.innerHTML = `<div class="panel-head"><h2>云端保存</h2></div><p class="notice" data-sync-status>${esc(ledgerStore.status || '仅保存在本机，登录后自动上传')}</p><p class="notice">${cloud.session ? '已登录：' + esc(cloud.session.user.email) : '登录后自动上传本机账本。使用 Supabase 中创建的个人账号。'}</p><form id="cloud-config"><label for="cloud-url">项目 URL</label><input class="wide" id="cloud-url" type="url" required value="${esc(cloud.config.url)}"><label for="cloud-key">公开 Publishable key</label><input class="wide" id="cloud-key" type="text" autocomplete="off" required value="${esc(cloud.config.key)}"><button class="secondary wide" type="submit">保存连接配置</button></form><form id="cloud-login"><label for="cloud-email">邮箱</label><input class="wide" id="cloud-email" type="email" autocomplete="username" required><label for="cloud-password">密码</label><input class="wide" id="cloud-password" type="password" autocomplete="current-password" required><button class="secondary wide" type="submit">${cloud.session ? '重新登录 / 切换账号' : '登录'}</button></form><div class="row"><button class="secondary" id="cloud-retry" type="button">重试同步</button>${cloud.session ? '<button class="text-button" id="cloud-logout" type="button">退出登录</button>' : ''}</div><p class="form-error" role="alert"></p>`;
+  app.querySelector('.panel').before(section);
+  section.querySelector('#cloud-config').onsubmit = event => {
+    event.preventDefault();
+    void cloudAction(async () => {
+      cloud.configure(section.querySelector('#cloud-url').value, section.querySelector('#cloud-key').value);
+      if (cloud.session) { ledgerStore.bind(); await ledgerStore.sync(true); }
+      else ledgerStore.setStatus('连接配置已保存，请登录');
+    });
+  };
+  section.querySelector('#cloud-login').onsubmit = event => {
+    event.preventDefault();
+    const email = section.querySelector('#cloud-email').value.trim();
+    const password = section.querySelector('#cloud-password').value;
+    void cloudAction(async () => {
+      await cloud.login(email, password);
+      section.querySelector('#cloud-password').value = '';
+      ledgerStore.bind();
+      await ledgerStore.sync(true);
+    });
+  };
+  section.querySelector('#cloud-retry').onclick = () => void cloudAction(() => ledgerStore.sync(true));
+  const logout = section.querySelector('#cloud-logout');
+  if (logout) logout.onclick = () => void cloudAction(async () => {
+    await cloud.logout(); ledgerStore.setStatus('已退出登录，本机缓存保留');
+  });
+  section.querySelectorAll('button').forEach(button => { button.disabled = cloudBusy; });
+}
+async function cloudAction(action, background = false) {
+  if (cloudBusy) return;
+  captureDraft();
+  const oldKey = ledgerStore.key;
+  const oldData = JSON.stringify(data);
+  cloudBusy = true;
+  cloudBackground = background;
+  app.querySelectorAll('#cloud-config button, #cloud-login button, #cloud-retry, #cloud-logout').forEach(button => { button.disabled = true; });
+  try {
+    if (ledgerStore.running) await ledgerStore.running.catch(() => {});
+    await action();
+  } catch (error) { ledgerStore.setStatus('同步未完成：' + error.message); }
+  finally {
+    cloudBusy = false;
+    cloudBackground = false;
+    try {
+      data = ledgerStore.read();
+      if (oldKey !== ledgerStore.key && oldKey !== C.KEY) {
+        draft = { amount: '', note: '', tags: [], payment: '', time: C.localTime() };
+        editing = ''; editingRule = ''; dialog.close(); page = 'settings';
+      } else captureDraft();
+      if ((!background || !['edit', 'rule'].includes(page)) && (oldData !== JSON.stringify(data) || page === 'settings')) render();
+    } catch (error) { readError = '本地缓存无法读取，请先复制备份。'; rawBackup = storage.getItem(ledgerStore.key) || ''; render(); }
+  }
 }
 function renderRule() {
   const rule = data.rules.find(r => r.id === editingRule);
@@ -265,4 +331,11 @@ document.querySelector('#nav').addEventListener('click', event => {
   if (button) go(button.dataset.page);
 });
 render();
-if (!readError) showPending();
+if (!readError) {
+  updateCloudStatus(cloud.session ? '正在连接云端' : '仅保存在本机，登录后自动上传');
+  if (cloud.session) void cloudAction(() => ledgerStore.sync(true), true).then(() => { if (!readError && ledgerStore.snapshot()) showPending(); });
+  else showPending();
+}
+window.addEventListener('online', () => {
+  if (!readError && !cloudBusy) void cloudAction(() => ledgerStore.sync(), true);
+});

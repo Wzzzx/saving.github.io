@@ -1,6 +1,6 @@
 # saving.github.io
 
-这是一个个人使用的记账软件。该软件部署为 Github Page
+这是一个个人使用的记账软件。该软件部署为 Github Page，本地缓存账本并通过 Supabase 保存云端副本。
 
 ## 架构
 
@@ -59,8 +59,16 @@
 
 本地预览：在根目录运行 `python -m http.server 8000`，浏览器打开 `http://localhost:8000`。
 
-逻辑测试：`node --test tests/core.test.js`。
+逻辑测试：`node --test tests/core.test.js`。同步模块测试：`node --test tests/storage.test.js`。
 
 手机浏览器验证：`node --test tests/browser.test.js`（使用已安装的 Chrome 或 Edge，也可用 `CHROME_PATH` 指定；无浏览器时跳过）。使用独立临时浏览器，不读取个人浏览数据。
 
 核心目标也记录在根目录 AGENTS.md，供后续在此仓库工作的助手读取。
+
+## Supabase 云端保存
+
+设置页已预填当前项目 URL 和公开 Publishable key。在 Supabase 控制台创建个人邮箱密码用户后，在存有旧账本的浏览器中登录，即会自动上传原有数据。无需第三方库或构建步骤。
+
+记账先保存本地，再自动上传；页头区分“待上传”和“已同步”。失败后数据仍在本地，下次打开、恢复联网或再次修改时重试，也可在设置页手动重试。上传成功保留本地缓存；无待上传修改时，启动会读取云端最新账本。
+
+本功能按单人单设备使用设计，不合并多设备并发修改。清理网站数据前应确认已同步或导出备份。详细结构、账号配置、权限与恢复说明见 [数据库文档](database/README.md)。本节取代上文“只保存在本地”的初版约定，其他业务行为不变。

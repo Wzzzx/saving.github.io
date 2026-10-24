@@ -12,7 +12,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 test('mobile browser: record, edit, filters, recurring, persistence and failure recovery', { skip: !browser, timeout: 60000 }, async () => {
   const server = http.createServer((req, res) => {
     const name = req.url.split('?')[0];
-    const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/core.js': 'core.js', '/style.css': 'style.css' };
+    const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/core.js': 'core.js', '/supabase.js': 'supabase.js', '/storage.js': 'storage.js', '/style.css': 'style.css' };
     if (!files[name]) { res.writeHead(404); res.end(); return; }
     res.setHeader('Content-Type', name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : 'text/html; charset=utf-8');
     res.end(fs.readFileSync(path.join(root, files[name])));
@@ -119,10 +119,40 @@ test('mobile browser: record, edit, filters, recurring, persistence and failure 
     fs.writeFileSync(path.join(root, '.artifacts', 'mobile-record.png'), Buffer.from(screenshot.data, 'base64'));
     await send('Emulation.setDeviceMetricsOverride', { width: 320, height: 640, deviceScaleFactor: 1, mobile: true });
     assert.ok(await run(() => document.documentElement.scrollWidth <= innerWidth), 'no horizontal overflow on narrow phone');
-    await run(() => localStorage.setItem('saving.v1', '{broken'));
+    // Exercise the real settings/login/storage wiring with a deterministic API.
+    await run(() => {
+      window.testRemote = null; window.testOffline = false;
+      cloud.request = async (url, options) => {
+        if (url.includes('/token')) return new Response(JSON.stringify({ user: { id: 'browser-user', email: 'test@example.invalid' }, access_token: 'test', refresh_token: 'test-refresh', expires_in: 3600 }));
+        if (window.testOffline) throw new Error('offline');
+        if (options.method === 'POST') { window.testRemote = JSON.parse(options.body); return new Response(JSON.stringify([window.testRemote])); }
+        return new Response(JSON.stringify(window.testRemote ? [window.testRemote] : []));
+      };
+      document.querySelector('[data-page=settings]').click();
+      document.querySelector('#cloud-email').value = 'test@example.invalid';
+      document.querySelector('#cloud-password').value = 'test-password';
+      document.querySelector('#cloud-login').requestSubmit();
+    });
+    for (let i = 0; i < 100; i++) { if (await run(() => !cloudBusy && !!window.testRemote)) break; await delay(30); }
+    assert.equal(await run(() => window.testRemote.payload.entries.length), 4);
+    assert.equal(await run(() => JSON.parse(localStorage.getItem(localStorage.getItem('saving.active')))._sync.dirty), false);
+    await run(() => {
+      window.testOffline = true;
+      document.querySelector('[data-page=record]').click();
+      document.querySelector('#amount').value = '9.99';
+      document.querySelector('#entry-form').requestSubmit();
+    });
+    assert.equal(await run(() => document.querySelector('#amount').value), '');
+    assert.equal(await run(() => JSON.parse(localStorage.getItem(localStorage.getItem('saving.active')))._sync.dirty), true);
+    await run(async () => { if (ledgerStore.running) await ledgerStore.running.catch(() => {}); window.testOffline = false; document.querySelector('[data-page=settings]').click(); document.querySelector('#cloud-retry').click(); });
+    for (let i = 0; i < 100; i++) { if (await run(() => !cloudBusy)) break; await delay(30); }
+    assert.equal(await run(() => window.testRemote.payload.entries.length), 5);
+    assert.equal(await run(() => JSON.parse(localStorage.getItem(localStorage.getItem('saving.active')))._sync.dirty), false);
+    assert.equal(await run(() => document.querySelector('#cloud-password').value), '');
+    await run(() => localStorage.setItem(localStorage.getItem('saving.active'), '{broken'));
     await send('Page.reload');
     for (let i = 0; i < 100; i++) { if (await run(() => !!document.querySelector('#raw-data'))) break; await delay(50); }
-    assert.equal(await run(() => localStorage.getItem('saving.v1')), '{broken');
+    assert.equal(await run(() => localStorage.getItem(localStorage.getItem('saving.active'))), '{broken');
     assert.equal(await run(() => document.querySelector('#raw-data').value), '{broken');
     assert.deepEqual(runtimeErrors, []);
   } finally {

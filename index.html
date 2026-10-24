@@ -9,11 +9,13 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%2336523e'/%3E%3Ctext x='32' y='45' text-anchor='middle' font-size='42' fill='white'%3E记%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="./style.css">
   <script defer src="./core.js"></script>
+  <script defer src="./supabase.js"></script>
+  <script defer src="./storage.js"></script>
   <script defer src="./app.js"></script>
 </head>
 <body>
   <div class="shell">
-    <header class="brand"><span class="brand-icon">记</span><span>轻记</span><span class="brand-dot" aria-hidden="true"></span></header>
+    <header class="brand"><span class="brand-icon">记</span><span>轻记</span><span class="sync-status" data-sync-status role="status"></span></header>
     <main id="app"></main>
     <nav aria-label="主导航" id="nav">
       <button type="button" data-page="record"><span aria-hidden="true">＋</span>记账</button>
