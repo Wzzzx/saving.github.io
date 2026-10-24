@@ -8,6 +8,20 @@ function memory() {
   const map = new Map();
   return { getItem: key => map.get(key) ?? null, setItem: (key, value) => map.set(key, value), removeItem: key => map.delete(key) };
 }
+test('network failures explain connectivity without losing the session or pending ledger', async () => {
+  const storage = memory();
+  const client = new Client(storage, async () => { throw new TypeError('Failed to fetch'); });
+  client.remember({ user: { id: 'alice' }, access_token: 'token', refresh_token: 'refresh', expires_in: 3600 });
+  const store = new Store(storage, client);
+  store.bind(); store.put(C.initial(), true);
+  const before = storage.getItem(store.key);
+  await assert.rejects(store.sync(), /无法连接云端/);
+  assert.equal(storage.getItem(store.key), before);
+  assert.equal(client.session.user.id, 'alice');
+  assert.match(store.status, /本地数据已保留/);
+  client.request = async () => new Response(JSON.stringify({ msg: 'Invalid login credentials' }), { status: 400 });
+  await assert.rejects(client.login('test@example.com', 'incorrect'), /Invalid login credentials/);
+});
 function fixture() {
   const storage = memory(), uploaded = [];
   const client = { config: { url: 'https://test.supabase.co' }, session: { user: { id: 'alice' } }, read: async () => null,
@@ -88,8 +102,8 @@ test('client refreshes session once, uses user token and schema headers, verifie
   const client = new Client(storage, async (url, options) => {
     calls.push({ url, options });
     if (url.includes('/token')) return new Response(JSON.stringify({ user, access_token: 'fresh', refresh_token: 'rotated', expires_in: 3600 }));
-    if (options.method === 'POST') return new Response(JSON.stringify([JSON.parse(options.body)]));
-    return new Response('[]');
+    if (url.endsWith('/read_book')) return new Response('null');
+    return new Response(JSON.stringify({ revision: JSON.parse(options.body).p_revision }));
   });
   client.remember({ user, access_token: 'old', refresh_token: 'refresh', expires_at: 1 });
   await Promise.all([client.token(), client.token()]);

@@ -125,8 +125,20 @@ test('mobile browser: record, edit, filters, recurring, persistence and failure 
       cloud.request = async (url, options) => {
         if (url.includes('/token')) return new Response(JSON.stringify({ user: { id: 'browser-user', email: 'test@example.invalid' }, access_token: 'test', refresh_token: 'test-refresh', expires_in: 3600 }));
         if (window.testOffline) throw new Error('offline');
-        if (options.method === 'POST') { window.testRemote = JSON.parse(options.body); return new Response(JSON.stringify([window.testRemote])); }
-        return new Response(JSON.stringify(window.testRemote ? [window.testRemote] : []));
+        if (url.endsWith('/read_book')) return new Response(JSON.stringify(window.testRemote));
+        const request = JSON.parse(options.body);
+        const payload = window.testRemote?.payload || { version: 1, tags: [], payments: [], entries: [], rules: [], processed: [], lastPayment: '' };
+        for (const name of ['tags', 'payments', 'entries', 'rules', 'processed']) {
+          const changes = request.p_changes[name]; if (!changes) continue;
+          const key = value => name === 'processed' ? value : value.id;
+          const rows = new Map(payload[name].map(value => [key(value), value]));
+          for (const id of changes.remove) rows.delete(id);
+          for (const value of changes.upsert) rows.set(key(value), value);
+          payload[name] = [...rows.values()];
+        }
+        if ('lastPayment' in request.p_changes) payload.lastPayment = request.p_changes.lastPayment;
+        window.testRemote = { payload, revision: request.p_revision };
+        return new Response(JSON.stringify({ revision: request.p_revision }));
       };
       document.querySelector('[data-page=settings]').click();
       document.querySelector('#cloud-email').value = 'test@example.invalid';

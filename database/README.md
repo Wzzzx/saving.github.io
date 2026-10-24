@@ -1,65 +1,74 @@
 # Savin 数据库与同步
 
-## 当前部署
+项目：`wvigvjmsjmyomizltahd`。所有业务表位于 `savin` schema。
 
-- 项目：`wvigvjmsjmyomizltahd`，URL：`https://wvigvjmsjmyomizltahd.supabase.co`。
-- 独立 schema：`savin`。建表定义见 [savin.sql](savin.sql)，已通过远端迁移 `create_savin_ledger` 部署。
-- 原有公开 schema `public, graphql_public` 保留。为当前 MCP 可用的部署方式，使用 `ALTER ROLE authenticator SET pgrst.db_schemas = 'public, graphql_public, savin'` 暴露 API。
-- **此角色配置会覆盖控制台的 Exposed schemas 配置。** 后续新增 schema 需保留完整列表后修改此设置并通知 PostgREST 重载；若要恢复控制台管理，先在控制台加入 `savin`，再执行 `ALTER ROLE authenticator RESET pgrst.db_schemas; NOTIFY pgrst, 'reload config';`。
-- SQL 为首次建表脚本，不重复执行。迁往其他项目时先核实该项目的 Exposed schemas，调整最后的列表，不覆盖其原有配置。
+## 云端结构
 
-## 表结构与权限
+| 表 | 存放内容 |
+| --- | --- |
+| `book_state` | 用户版本、上次付款方式、升级状态、更新时间 |
+| `entries` | 每笔账目一行：整数分金额、业务时间、付款方式、标签数组、备注、补记来源 |
+| `tags` | 每个标签一行，包含名称和启用状态 |
+| `payments` | 每个付款方式一行，包含名称和启用状态 |
+| `rules` | 每条固定支出一行，版本历史保存在该行的 `versions` JSONB 中 |
+| `processed` | 每个已补记标记一行，删除账目不删除该标记 |
+| `ledgers` | 升级前的完整账本，兼容来源和迁移备份 |
 
-`savin.ledgers` 每个 Auth 用户一行：
+业务表以 `(user_id, id)` 为主键，`book_state` 以 `user_id` 为主键。用户外键引用 Auth，删除用户会级联清理。身份序列 `position` 保持原数组顺序；编辑不改变顺序，删除一笔不更新其他行。账目有 `(user_id, time desc)` 索引。历史付款方式、标签引用不设级联删除关系，避免配置删除影响历史。
 
-| 字段 | 类型 | 用途 |
-| --- | --- | --- |
-| user_id | UUID 主键、Auth 用户外键 | 账本归属；删除 Auth 用户会级联删除账本 |
-| payload | JSONB，非空 | 完整 v1 账本 |
-| revision | UUID，非空 | 本次本地修改的标识，确认上传的是哪个版本 |
-| updated_at | timestamptz | 数据库触发器生成的写入时间 |
+本地业务结构和导出格式保持 `version: 1`，包括 `tags/payments/entries/rules/processed/lastPayment`。时间仍是本地时间字符串，不转换时区；金额为整数分。
 
-`payload` 包含 `version`、`tags`、`payments`、`entries`、`rules`、`processed`、`lastPayment`，保留记录的备注、规则历史、停用标记等字段。金额仍为整数分，业务日期时间格式不变。数据库约束校验版本和主要数组类型，前端继续执行原有业务校验。
+付款方式通过 `payments_user_name_key UNIQUE (user_id, name)` 保证同一账号名称唯一，包含停用项；不同账号允许同名。现有重名已合并后执行 [payments-unique-name.sql](payments-unique-name.sql)，远端迁移名 `payments_unique_name_per_user`。名称按数据库原始文本精确比较。
 
-仅 `authenticated` 获得 schema 使用权和表 SELECT / INSERT / UPDATE 权限。三条 RLS 策略均检查 `auth.uid() = user_id`，UPDATE 同时检查更新前后归属。匿名不能访问，无客户端删除整本账本权限；业务删除通过更新 payload 实现。触发器采用 SECURITY INVOKER、空 search_path，不提供公开可调用的特权函数。
+## 同步协议
 
-## 首次使用
+- `read_book()` 在一个 SQL 查询快照中组装完整本地 JSON 与版本，返回单个 JSON 对象，避免 REST 列表默认行数限制导致截断。下载目前仍是完整账本。
+- `apply_changes(p_base, p_revision, p_changes)` 仅接收变化集合：`upsert` 为新增/修改行，`remove` 为删除 ID，付款偏好变化单独传递。未变记录不上传、不重写。
+- 更新先锁定该用户的版本行，校验基础版本，在同一事务中提交全部变化。补记账目和处理标记一起成功或一起回滚。
+- 已提交版本重试直接返回确认；基础版本过旧返回 409，不覆盖云端。仍按单人单设备设计，**不自动合并多设备冲突**。
+- 首次升级没有同步基线时，先读取云端作为基线，再同步本地账本的差异。首次升级应在原来记账的设备上完成。
 
-1. 在当前项目控制台 Authentication → Users → Add user 创建自己的邮箱密码用户并确认邮箱；网页只提供登录，不发送注册邮件。
-2. 在**存有旧账本的同一浏览器和网站地址**打开网页，进入设置 → 云端保存。已预填项目 URL 和公开 Publishable key，通常无需修改。
-3. 登录后自动将旧账本上传。页头和设置页显示“已同步”后，云端已有完整副本。
+## 本地缓存与断网恢复
 
-公开 key 可以出现在页面源码中，权限由登录令牌和 RLS 控制。不要在页面填写 secret、service_role 或数据库密码。登录密码不落盘；会话令牌与连接配置保存在本机，不进入账本导出。
+- 未登录沿用 `saving.v1`；登录后沿用 `saving.cache:<project URL>:<user ID>`，`saving.active` 指向当前账号。原始 `saving.v1` 留作备份。
+- 每次修改把完整业务 JSON 和 `_sync: {dirty, revision}` 一次写入 LocalStorage，再后台同步。失败仍可继续本地记账；只有确认成功才清除匹配版本的标记。
+- `saving.sync.v2:<project URL>:<user ID>` 额外保存最近确认的基线，以及发送前持久化的待确认请求和快照。按项目和用户隔离，不进入导出。这会额外占用本地空间，写满时不冒充上传成功。
+- 请求提交但响应丢失时，刷新仍会先重放原请求，确认后再提交后续修改，不丢弃待确认请求。
+- 重试时机：打开页面、网络恢复、下一次修改、重新登录，以及手动“重试同步”。不会无限循环。
+- 无本地修改时启动读取云端；下载期间出现本地修改，以本地修改为准。无缓存且云端读取失败时禁止用空数据覆盖云端。
+- 退出登录保留缓存和待上传请求。冲突时先导出本地备份，再人工核对；普通重试不会跳过版本校验。目前没有自动冲突处理界面。
+- 无 Service Worker：已打开的页面可离线记账，断网后重新打开网页不保证能加载。
 
-## 本地数据和同步规则
+## 权限
 
-- 未登录时沿用 `saving.v1`，额外 `_sync` 字段与账本一次写入，记录 `dirty` 和 `revision`；导出时去除该内部字段。
-- 首次登录将旧账本复制至 `saving.cache:<project URL>:<user ID>`，设置 `saving.active` 指向该账号缓存。原始 `saving.v1` 留作迁移备份，不再作为活动账本或反复上传。
-- 每次修改先成功写入本地，再异步上传整个 payload。失败保留待上传状态；成功只清除匹配版本的标记，缓存仍保留。
-- 一个上传请求进行中时，新修改写入本地；请求结束后继续上传最新版本。相同用户的 upsert 更新同一行，重试不会追加重复账目。
-- 启动时优先上传待上传账本；本地无修改时读取云端。下载期间产生本地修改，不以下载结果覆盖它。有缓存时可立即继续记账。
-- 本地和云端均无账本时才创建默认数据。云端读取失败且没有缓存时禁止保存，避免空账本覆盖云端。
-- 自动重试触发点：打开网页、恢复网络、下一次修改、重新登录；设置中也可手动重试。不会无限循环请求。
-- 退出登录保留所属账号缓存，仍可在本机记账；重新登录该账号后同步。切换项目或账号会使用各自缓存，不上传原账号数据到新账号。
-- 单设备约定：本地待上传账本优先，完整覆盖该账号云端版本。不支持并行多设备合并；不要在多台设备离线修改同一账号账本。
-- 无 Service Worker，已打开的网页可断网记账，断网后重新打开网页不保证可用。
+所有新表启用 RLS，SELECT/INSERT/UPDATE/DELETE 限定 `(select auth.uid()) = user_id`，UPDATE 同时校验新旧归属。匿名没有访问权。RPC 使用 SECURITY INVOKER 和空 search_path，通过调用者权限及 RLS 执行，不能指定其他用户。
 
-## 失败恢复与验证
+前端仅使用公开 Publishable key 和用户令牌。密码不落盘，令牌不进入导出。本次不修改其他 schema 或全局 Data API 暴露配置。原项目通过 authenticator 的 pgrst.db_schemas 配置暴露 savin，该配置覆盖控制台的 Exposed schemas，后续修改应保留 public、graphql_public、savin。
 
-看到“待上传”或“同步未完成”时不要清理网站数据。可先复制全部数据备份，再检查网络或重新登录并重试。LocalStorage 写入失败会保留表单输入；数据格式异常保留原始内容用于复制备份。
+## 迁移与兼容
 
-测试命令：
+初始定义：[savin.sql](savin.sql)。增量升级：[incremental.sql](incremental.sql)，远端迁移名 `normalize_savin_incremental_storage`。脚本按顺序各运行一次，不重复执行。
+
+升级在一个事务中创建表、迁移所有账号并安装兼容触发器，不删除旧 ledgers。完整 JSON 比对一致：23 笔、78,022 分，8 个标签、12 个付款方式、2 条固定支出（含停用配置）。
+
+新前端发布前，旧前端仍可写入 ledgers，触发器同步至新表。该账号首次通过新 RPC 写入后，v2_started 变为 true，旧接口写入会提示刷新，避免全量覆盖。ledgers 此后是历史备份，不代表最新数据；查询最新数据应使用新表或 read_book()。
+
+前端发布至 GitHub Pages 后，在原设备刷新使用。不能只回退前端至旧版而继续写入已升级账号。迁移不自动删除备份。
+
+## 验证
 
 ```text
-node --test tests/core.test.js tests/storage.test.js tests/browser.test.js
+node --test tests/core.test.js tests/storage.test.js tests/incremental.test.js tests/browser.test.js
 node --check core.js
 node --check app.js
 node --check storage.js
 node --check supabase.js
 ```
 
-`tests/cloud-smoke.js` 是显式执行的真实云端测试，需用可丢弃测试用户，通过环境变量 `SAVIN_TEST_EMAIL` 和 `SAVIN_TEST_PASSWORD` 提供凭据。脚本会写测试账本并退出登录，不自动删除 Auth 用户；测试后在控制台删除测试用户以级联清理账本。不要使用个人真实账号运行。
+[verify-incremental.sql](verify-incremental.sql) 使用管理员连接，检查迁移相等、原子更新、幂等重试、版本冲突、旧接口保护和 RLS，最后回滚所有账本变化。适用于尚未通过 v2 写入且至少有一笔账目的迁移验证账号。
 
-本次部署已验证真实 Auth 登录及刷新、REST 读写和重复上传、匿名拒绝、跨账号拒绝、数据库 RLS 读写隔离。临时测试用户和账本已删除。安全检查无告警。
+tests/cloud-smoke.js 会写入数据，仅限专门创建的可丢弃账号；凭据通过环境变量 SAVIN_TEST_EMAIL/SAVIN_TEST_PASSWORD 提供，不得对真实账本运行。
 
-参考：[自定义 schema](https://supabase.com/docs/guides/api/using-custom-schemas)、[RLS](https://supabase.com/docs/guides/database/postgres/row-level-security)。
+迁移后安全检查未报告新增表的 RLS 问题；项目另有“密码泄露检测未开启”告警，本次未调整 Auth 设置，参见 [密码保护配置](https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection)。
+
+参考：[数据库函数](https://supabase.com/docs/guides/database/functions)、[RLS](https://supabase.com/docs/guides/database/postgres/row-level-security)。

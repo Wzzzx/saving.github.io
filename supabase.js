@@ -1,6 +1,22 @@
 (function (root) {
   'use strict';
   const DEFAULT = { url: 'https://wvigvjmsjmyomizltahd.supabase.co', key: 'sb_publishable_i0KW8Jrf4vUzb0b-4tEzHw_9coOktId' };
+  const C = typeof module !== 'undefined' ? require('./core.js') : root.Ledger;
+  const collections = ['tags', 'payments', 'entries', 'rules', 'processed'];
+  const canonical = value => JSON.stringify(value, (_, v) => v && !Array.isArray(v) && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
+  function diff(base, next) {
+    const changes = {};
+    for (const name of collections) {
+      const key = value => name === 'processed' ? value : value.id;
+      const previous = new Map((base?.[name] || []).map(value => [key(value), value]));
+      const current = new Map(next[name].map(value => [key(value), value]));
+      const upsert = [...current].filter(([id, value]) => canonical(value) !== canonical(previous.get(id))).map(([, value]) => value);
+      const remove = [...previous.keys()].filter(id => !current.has(id));
+      if (upsert.length || remove.length) changes[name] = { upsert, remove };
+    }
+    if (!base || base.lastPayment !== next.lastPayment) changes.lastPayment = next.lastPayment || '';
+    return changes;
+  }
   class Client {
     constructor(storage, request = globalThis.fetch.bind(globalThis)) {
       this.storage = storage;
@@ -37,6 +53,7 @@
         return value;
       } catch (error) {
         if (error.name === 'AbortError') throw new Error('连接超时，本地数据已保留');
+        if (error instanceof TypeError) throw new Error('无法连接云端，请检查网络或切换 Wi-Fi / 手机流量后重试，并确认设置中的项目 URL 正确。本地数据已保留');
         throw error;
       } finally { clearTimeout(timer); }
     }
@@ -65,22 +82,46 @@
       this.session = null;
       if (token) { try { await this.call('/auth/v1/logout?scope=local', { method: 'POST' }, token); } catch { /* Local logout works offline. */ } }
     }
+    syncKey() { return 'saving.sync.v2:' + this.config.url + ':' + this.session.user.id; }
+    async rpc(name, args = {}) {
+      return this.call('/rest/v1/rpc/' + name, {
+        method: 'POST', headers: { 'Content-Profile': 'savin', 'Accept-Profile': 'savin' }, body: JSON.stringify(args)
+      }, await this.token());
+    }
     async read() {
-      const token = await this.token();
-      const rows = await this.call('/rest/v1/ledgers?select=payload,revision&user_id=eq.' + encodeURIComponent(this.session.user.id), { headers: { 'Accept-Profile': 'savin' } }, token);
-      if (!Array.isArray(rows) || rows.length > 1) throw new Error('云端账本响应异常');
-      return rows[0] || null;
+      const row = await this.rpc('read_book');
+      if (row !== null && (!row?.revision || !row.payload)) throw new Error('云端账本响应异常');
+      if (row) C.validate(row.payload);
+      // Do not discard a request whose response may have been lost.
+      const saved = JSON.parse(this.storage.getItem(this.syncKey()) || 'null');
+      if (saved?.pending) throw new Error('仍有待确认的上传，请先重试同步');
+      this.storage.setItem(this.syncKey(), JSON.stringify({ base: row }));
+      return row;
     }
     async write(payload, revision) {
-      const token = await this.token();
-      const rows = await this.call('/rest/v1/ledgers?on_conflict=user_id', {
-        method: 'POST', headers: { 'Content-Profile': 'savin', 'Accept-Profile': 'savin', Prefer: 'resolution=merge-duplicates,return=representation' },
-        body: JSON.stringify({ user_id: this.session.user.id, payload, revision })
-      }, token);
-      if (!Array.isArray(rows) || rows.length !== 1 || rows[0].revision !== revision) throw new Error('未收到云端保存确认，本地数据已保留');
+      C.validate(payload);
+      const key = this.syncKey();
+      let saved = JSON.parse(this.storage.getItem(key) || 'null');
+      if (!saved) { await this.read(); saved = JSON.parse(this.storage.getItem(key)); }
+      const flush = async () => {
+        const pending = saved.pending;
+        const ack = await this.rpc('apply_changes', pending.request);
+        if (ack?.revision !== pending.request.p_revision) throw new Error('未收到云端保存确认，本地数据已保留');
+        saved = { base: { payload: pending.payload, revision: ack.revision } };
+        this.storage.setItem(key, JSON.stringify(saved));
+      };
+      // Replay exactly the same transaction before sending later offline edits.
+      if (saved.pending) await flush();
+      if (saved.base?.revision === revision) return;
+      saved.pending = {
+        request: { p_base: saved.base?.revision || null, p_revision: revision, p_changes: diff(saved.base?.payload, payload) },
+        payload: structuredClone(payload)
+      };
+      this.storage.setItem(key, JSON.stringify(saved));
+      await flush();
     }
   }
-  const api = { Client, DEFAULT };
+  const api = { Client, DEFAULT, diff };
   if (typeof module !== 'undefined') module.exports = api;
   else root.SavinCloud = api;
 })(globalThis);

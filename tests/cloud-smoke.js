@@ -25,11 +25,11 @@ async function main() {
     assert.equal(read.payload.entries.length, 1); assert.equal(read.payload.entries[0].amount, 5678);
     assert.equal(read.revision, second);
     const token = await client.token();
-    await assert.rejects(client.call('/rest/v1/ledgers', {
+    await assert.rejects(client.call('/rest/v1/entries', {
       method: 'POST', headers: { 'Content-Profile': 'savin' },
-      body: JSON.stringify({ user_id: C.id(), payload, revision: C.id() })
+      body: JSON.stringify({ user_id: C.id(), ...payload.entries[0] })
     }, token), /row-level security/);
-    await assert.rejects(client.call('/rest/v1/ledgers?select=user_id', { headers: { 'Accept-Profile': 'savin' } }), error => error.status === 401 || error.status === 403);
+    await assert.rejects(client.call('/rest/v1/rpc/read_book', { method: 'POST', body: '{}', headers: { 'Content-Profile': 'savin' } }), error => error.status === 401 || error.status === 403);
     client.session.expires_at = 1;
     await client.token();
     assert.equal((await client.read()).revision, second);
