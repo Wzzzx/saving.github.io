@@ -147,6 +147,16 @@ test('mobile browser: record, edit, filters, recurring, persistence and failure 
     });
     for (let i = 0; i < 100; i++) { if (await run(() => !cloudBusy && !!window.testRemote)) break; await delay(30); }
     assert.equal(await run(() => window.testRemote.payload.entries.length), 4);
+    assert.equal(await run(() => document.querySelector('#cloud-login').getClientRects().length), 0);
+    assert.equal(await run(() => document.querySelector('#cloud-url, #cloud-key, .cloud-connection')), null);
+    assert.deepEqual(await run(() => [...app.lastElementChild.querySelectorAll('button')].filter(el => el.getClientRects().length).map(el => el.textContent)), ['切换登录']);
+    assert.equal(await run(() => document.querySelector('#cloud-account').closest('section') === app.lastElementChild), true);
+    await run(() => document.querySelector('#cloud-account').click());
+    assert.ok(await run(() => document.querySelector('#cloud-login').getClientRects().length > 0));
+    assert.equal(await run(() => document.activeElement.id), 'cloud-email');
+    await run(() => { document.querySelector('#cloud-password').value = 'discard'; document.querySelector('#cloud-account').click(); });
+    assert.equal(await run(() => document.querySelector('#cloud-password').value), '');
+    assert.equal(await run(() => document.querySelector('#cloud-login').getClientRects().length), 0);
     assert.equal(await run(() => JSON.parse(localStorage.getItem(localStorage.getItem('saving.active')))._sync.dirty), false);
     await run(() => {
       window.testOffline = true;
@@ -156,7 +166,7 @@ test('mobile browser: record, edit, filters, recurring, persistence and failure 
     });
     assert.equal(await run(() => document.querySelector('#amount').value), '');
     assert.equal(await run(() => JSON.parse(localStorage.getItem(localStorage.getItem('saving.active')))._sync.dirty), true);
-    await run(async () => { if (ledgerStore.running) await ledgerStore.running.catch(() => {}); window.testOffline = false; document.querySelector('[data-page=settings]').click(); document.querySelector('#cloud-retry').click(); });
+    await run(async () => { if (ledgerStore.running) await ledgerStore.running.catch(() => {}); window.testOffline = false; document.querySelector('[data-page=settings]').click(); window.dispatchEvent(new Event('online')); });
     for (let i = 0; i < 100; i++) { if (await run(() => !cloudBusy)) break; await delay(30); }
     assert.equal(await run(() => window.testRemote.payload.entries.length), 5);
     assert.equal(await run(() => JSON.parse(localStorage.getItem(localStorage.getItem('saving.active')))._sync.dirty), false);

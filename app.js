@@ -207,15 +207,16 @@ function updateCloudStatus(message) {
 function renderCloudPanel() {
   const section = document.createElement('section');
   section.className = 'panel';
-  section.innerHTML = `<div class="panel-head"><h2>云端保存</h2></div><p class="notice" data-sync-status>${esc(ledgerStore.status || '仅保存在本机，登录后自动上传')}</p><p class="notice">${cloud.session ? '已登录：' + esc(cloud.session.user.email) : '登录后自动上传本机账本。使用 Supabase 中创建的个人账号。'}</p><form id="cloud-config"><label for="cloud-url">项目 URL</label><input class="wide" id="cloud-url" type="url" required value="${esc(cloud.config.url)}"><label for="cloud-key">公开 Publishable key</label><input class="wide" id="cloud-key" type="text" autocomplete="off" required value="${esc(cloud.config.key)}"><button class="secondary wide" type="submit">保存连接配置</button></form><form id="cloud-login"><label for="cloud-email">邮箱</label><input class="wide" id="cloud-email" type="email" autocomplete="username" required><label for="cloud-password">密码</label><input class="wide" id="cloud-password" type="password" autocomplete="current-password" required><button class="secondary wide" type="submit">${cloud.session ? '重新登录 / 切换账号' : '登录'}</button></form><div class="row"><button class="secondary" id="cloud-retry" type="button">重试同步</button>${cloud.session ? '<button class="text-button" id="cloud-logout" type="button">退出登录</button>' : ''}</div><p class="form-error" role="alert"></p>`;
-  app.querySelector('.panel').before(section);
-  section.querySelector('#cloud-config').onsubmit = event => {
-    event.preventDefault();
-    void cloudAction(async () => {
-      cloud.configure(section.querySelector('#cloud-url').value, section.querySelector('#cloud-key').value);
-      if (cloud.session) { ledgerStore.bind(); await ledgerStore.sync(true); }
-      else ledgerStore.setStatus('连接配置已保存，请登录');
-    });
+  section.innerHTML = `${cloud.session ? '<button class="secondary wide" id="cloud-account" type="button" aria-expanded="false" aria-controls="cloud-login">切换登录</button>' : '<div class="panel-head"><h2>云端保存</h2></div><p class="notice">登录后自动上传本机账本。</p>'}<form id="cloud-login"${cloud.session ? ' hidden' : ''}><label for="cloud-email">邮箱</label><input class="wide" id="cloud-email" type="email" autocomplete="username" required><label for="cloud-password">密码</label><input class="wide" id="cloud-password" type="password" autocomplete="current-password" required><button class="secondary wide" type="submit">登录</button></form><p class="form-error" role="alert"></p>`;
+  app.append(section);
+  const account = section.querySelector('#cloud-account');
+  if (account) account.onclick = () => {
+    const form = section.querySelector('#cloud-login');
+    form.hidden = !form.hidden;
+    account.setAttribute('aria-expanded', String(!form.hidden));
+    account.textContent = form.hidden ? '切换登录' : '取消登录';
+    if (form.hidden) form.reset();
+    else section.querySelector('#cloud-email').focus();
   };
   section.querySelector('#cloud-login').onsubmit = event => {
     event.preventDefault();
@@ -228,11 +229,6 @@ function renderCloudPanel() {
       await ledgerStore.sync(true);
     });
   };
-  section.querySelector('#cloud-retry').onclick = () => void cloudAction(() => ledgerStore.sync(true));
-  const logout = section.querySelector('#cloud-logout');
-  if (logout) logout.onclick = () => void cloudAction(async () => {
-    await cloud.logout(); ledgerStore.setStatus('已退出登录，本机缓存保留');
-  });
   section.querySelectorAll('button').forEach(button => { button.disabled = cloudBusy; });
 }
 async function cloudAction(action, background = false) {
@@ -242,7 +238,7 @@ async function cloudAction(action, background = false) {
   const oldData = JSON.stringify(data);
   cloudBusy = true;
   cloudBackground = background;
-  app.querySelectorAll('#cloud-config button, #cloud-login button, #cloud-retry, #cloud-logout').forEach(button => { button.disabled = true; });
+  app.querySelectorAll('#cloud-login button, #cloud-account').forEach(button => { button.disabled = true; });
   try {
     if (ledgerStore.running) await ledgerStore.running.catch(() => {});
     await action();
